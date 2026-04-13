@@ -3,6 +3,7 @@ import json
 import io
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import google.generativeai as genai
 from PIL import Image
@@ -11,6 +12,14 @@ app = FastAPI(
     title="Aadhaar OCR API",
     description="API to extract structured information from Indian Aadhaar cards using Gemini 1.5 Flash",
     version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Ensure the API key correctly relies on Environment Variables ONLY for security
