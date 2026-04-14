@@ -1,8 +1,9 @@
 import os
 import json
 import io
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
+import base64
+import binascii
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import google.generativeai as genai
@@ -40,6 +41,10 @@ class AadhaarData(BaseModel):
     aadhaar_number: str = Field(default="")
     address: str = Field(default="")
 
+class AadhaarBase64Request(BaseModel):
+    front_image_base64: str = Field(..., min_length=20)
+    back_image_base64: str = Field(..., min_length=20)
+
 def parse_json_response(text: str) -> dict:
     """Parses the JSON response from Gemini, handling potential markdown."""
     text = text.strip()
@@ -72,22 +77,47 @@ def format_data(data: dict) -> dict:
     
     return data
 
-@app.post("/extract-aadhaar", response_model=AadhaarData)
-async def extract_aadhaar(
-    front_image: UploadFile = File(...),
-    back_image: UploadFile = File(...)
-):
-    try:
-        # Read the images into memory
-        front_bytes = await front_image.read()
-        back_bytes = await back_image.read()
+MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8MB max per image payload
+MAX_IMAGE_DIMENSION = (1024, 1024)
 
-        # Load images via PIL for the Gemini API and limit size to compress memory usage
-        front_pil = Image.open(io.BytesIO(front_bytes))
-        front_pil.thumbnail((1024, 1024))
-        
-        back_pil = Image.open(io.BytesIO(back_bytes))
-        back_pil.thumbnail((1024, 1024))
+def _strip_data_url_prefix(image_base64: str) -> str:
+    """Supports plain base64 and data URL formats."""
+    if "," in image_base64 and image_base64.lower().startswith("data:image"):
+        return image_base64.split(",", 1)[1]
+    return image_base64
+
+def decode_base64_to_image(image_base64: str, label: str) -> Image.Image:
+    """Decodes base64 into a PIL image with validation and memory constraints."""
+    cleaned = _strip_data_url_prefix(image_base64.strip())
+
+    try:
+        image_bytes = base64.b64decode(cleaned, validate=True)
+    except binascii.Error as exc:
+        raise HTTPException(status_code=400, detail=f"{label} is not valid base64.") from exc
+
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail=f"{label} is empty after decoding.")
+
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{label} exceeds {MAX_IMAGE_BYTES // (1024 * 1024)}MB limit."
+        )
+
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+        image = image.convert("RGB")
+        image.thumbnail(MAX_IMAGE_DIMENSION)
+        return image
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"{label} is not a valid image.") from exc
+
+@app.post("/extract-aadhaar", response_model=AadhaarData)
+async def extract_aadhaar(payload: AadhaarBase64Request):
+    try:
+        # Decode base64 payload into compressed PIL images for low-memory OCR on Render.
+        front_pil = decode_base64_to_image(payload.front_image_base64, "front_image_base64")
+        back_pil = decode_base64_to_image(payload.back_image_base64, "back_image_base64")
 
         # Prompt specifying the task and expected strict JSON output
         prompt = """
