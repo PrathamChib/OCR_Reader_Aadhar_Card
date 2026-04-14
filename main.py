@@ -82,9 +82,12 @@ async def extract_aadhaar(
         front_bytes = await front_image.read()
         back_bytes = await back_image.read()
 
-        # Load images via PIL for the Gemini API
+        # Load images via PIL for the Gemini API and limit size to compress memory usage
         front_pil = Image.open(io.BytesIO(front_bytes))
+        front_pil.thumbnail((1024, 1024))
+        
         back_pil = Image.open(io.BytesIO(back_bytes))
+        back_pil.thumbnail((1024, 1024))
 
         # Prompt specifying the task and expected strict JSON output
         prompt = """
